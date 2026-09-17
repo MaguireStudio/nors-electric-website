@@ -29,7 +29,9 @@ export function localBusinessSchema() {
     legalName: site.legalName,
     description: site.shortDescription,
     url: site.url,
-    telephone: site.phone,
+    // Omitted entirely while unconfirmed — structured data carrying a
+    // placeholder is worse than structured data carrying nothing.
+    ...(site.phoneConfirmed ? { telephone: site.phone } : {}),
     ...(site.email ? { email: site.email } : {}),
     foundingDate: String(site.foundedYear),
     address: {

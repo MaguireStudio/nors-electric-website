@@ -97,7 +97,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       {
         ok: false,
-        error: `We could not record your request. Please call us at ${site.phone} so it doesn't get lost.`,
+        error: site.phoneConfirmed
+          ? `We could not record your request. Please call us at ${site.phone} so it doesn't get lost.`
+          : "We could not record your request. Please reach out on Facebook or Instagram so it doesn't get lost.",
       },
       { status: 500 },
     );

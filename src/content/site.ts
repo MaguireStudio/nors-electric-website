@@ -28,13 +28,55 @@ const SITE_URL: { href: string; configured: boolean } = (() => {
     return { href: explicit.replace(/\/+$/, ""), configured: true };
   }
 
+  // A *.vercel.app URL makes the build self-consistent, but it is not a domain
+  // the business owns, so it must NEVER flip indexing on. Treating it as
+  // configured is what let a preview deploy advertise itself to crawlers with
+  // canonical URLs pointing at a hostname that will be thrown away.
   const vercelDomain =
     process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL;
   if (vercelDomain) {
-    return { href: `https://${vercelDomain}`, configured: true };
+    return { href: `https://${vercelDomain}`, configured: false };
   }
 
   return { href: "http://localhost:3000", configured: false };
+})();
+
+/**
+ * CONTACT NUMBER — UNCONFIRMED. NOTHING ON THE SITE PRINTS A NUMBER YET.
+ *
+ * Three numbers appear across NORS's own channels and they do not agree:
+ *
+ *   (270) 752-4805   Instagram bio, and the caption of recent Facebook posts
+ *   (270) 752-4590   labelled "Call" on Chris Norsworthy's dot.cards profile
+ *   (270) 293-0069   third-party aggregators only (findglocal, the Murray
+ *                    Highlighter) — carried by no owner-controlled source
+ *
+ * A fourth number, (270) 873-9193, sits on the same dot.cards profile against
+ * "Jordan Norsworthy" under Zelle and Venmo. That is a payment contact, not an
+ * intake line, and must never reach the site.
+ *
+ * `candidate` below is the best-evidenced of the three, kept here so confirming
+ * it is a one-line edit rather than a research job someone has to redo. A
+ * customer who calls a number nobody answers is a job NORS loses and never
+ * hears about, so while `confirmed` is false every phone slot renders
+ * `displayWhenUnconfirmed` and no tel:/sms: link is emitted anywhere.
+ *
+ * To go live: confirm the number with the owner, set `confirmed` to true.
+ */
+const PHONE = (() => {
+  const confirmed: boolean = false;
+  const candidate = "(270) 752-4805";
+  const e164 = "+12707524805";
+  const displayWhenUnconfirmed = "phone number";
+
+  return {
+    phone: confirmed ? candidate : displayWhenUnconfirmed,
+    // With no confirmed number, every call-to-action still has somewhere real
+    // to go rather than a dead link.
+    phoneHref: confirmed ? `tel:${e164}` : "/contact",
+    smsHref: confirmed ? `sms:${e164}` : "/contact",
+    phoneConfirmed: confirmed,
+  };
 })();
 
 export const site = {
@@ -60,9 +102,7 @@ export const site = {
   foundedYear: 2016, // VERIFIED (listings report ~9 years in business)
 
   // ---- Contact --------------------------------------------------------- //
-  phone: "(270) 293-0069", // VERIFIED
-  phoneHref: "tel:+12702930069", // VERIFIED
-  smsHref: "sms:+12702930069",
+  ...PHONE,
   // NULL UNTIL CONFIRMED: a mailto: link to an address that doesn't exist
   // bounces silently and loses the customer. Every email link and address on
   // the site is hidden while this is null, and the phone number shown instead.
