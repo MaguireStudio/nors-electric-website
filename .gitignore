@@ -10,3 +10,7 @@ next-env.d.ts
 .DS_Store
 data/leads.jsonl
 data/
+
+# Agent tooling (gm / agentplug) — local state, never part of the site.
+.gm/
+.agentplug-kv/

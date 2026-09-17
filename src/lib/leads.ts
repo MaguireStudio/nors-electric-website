@@ -167,12 +167,12 @@ export function formatLeadAsHtml(lead: StoredLead): string {
 </div>`;
 }
 
-/** Emails the office via Resend. No-ops (without failing) if unconfigured. */
-async function sendNotificationEmail(lead: StoredLead): Promise<void> {
+/** Emails the office via Resend. Returns false when unconfigured, throws when it fails. */
+async function sendNotificationEmail(lead: StoredLead): Promise<boolean> {
   const apiKey = process.env.RESEND_API_KEY;
   const to = process.env.LEAD_NOTIFICATION_EMAIL;
   const from = process.env.LEAD_FROM_EMAIL;
-  if (!apiKey || !to || !from) return;
+  if (!apiKey || !to || !from) return false;
 
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
@@ -195,12 +195,14 @@ async function sendNotificationEmail(lead: StoredLead): Promise<void> {
   if (!res.ok) {
     throw new Error(`Resend responded ${res.status}: ${await res.text()}`);
   }
+
+  return true;
 }
 
-/** POSTs the lead to a CRM / Zapier / Make webhook. No-ops if unconfigured. */
-async function sendWebhook(lead: StoredLead): Promise<void> {
+/** POSTs the lead to a CRM / Zapier / Make webhook. Returns false when unconfigured. */
+async function sendWebhook(lead: StoredLead): Promise<boolean> {
   const url = process.env.LEAD_WEBHOOK_URL;
-  if (!url) return;
+  if (!url) return false;
 
   const res = await fetch(url, {
     method: "POST",
@@ -216,20 +218,69 @@ async function sendWebhook(lead: StoredLead): Promise<void> {
   if (!res.ok) {
     throw new Error(`Webhook responded ${res.status}`);
   }
+
+  return true;
 }
 
 /**
- * Fans the lead out to every configured destination. Individual failures are
- * logged, never thrown — a broken email key must not lose the customer's
- * request, which is already on disk by this point.
+ * Whether the file written by `persistLead` outlives the request.
+ *
+ * On Vercel and Lambda it does not — DATA_DIR is /tmp there, which is wiped
+ * between deploys and not shared between instances. An explicit LEADS_DATA_DIR
+ * means the operator mounted a real volume, so the file is the durable copy.
  */
-export async function notifyNewLead(lead: StoredLead): Promise<void> {
-  const results = await Promise.allSettled([sendNotificationEmail(lead), sendWebhook(lead)]);
-  for (const r of results) {
-    if (r.status === "rejected") {
-      console.error("[leads] notification failed:", r.reason);
+export function isFileStorageDurable(): boolean {
+  if (process.env.LEADS_DATA_DIR) return true;
+  return !(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
+}
+
+export type NotifyOutcome = {
+  /** Destinations that were configured and therefore actually tried. */
+  attempted: string[];
+  /** Destinations that accepted the lead. */
+  delivered: string[];
+  /** Destinations that were tried and rejected it. */
+  failed: { destination: string; reason: string }[];
+};
+
+/**
+ * Fans the lead out to every configured destination and REPORTS what happened.
+ *
+ * Individual failures are never thrown — one broken destination must not stop
+ * the other — but they are not swallowed either. A configured-but-failing
+ * destination (an expired Resend key, an unverified sending domain) is
+ * indistinguishable from success to the customer unless the caller can see
+ * this outcome, and on a serverless host that silence loses the lead entirely.
+ */
+export async function notifyNewLead(lead: StoredLead): Promise<NotifyOutcome> {
+  const destinations = [
+    { name: "email", send: () => sendNotificationEmail(lead) },
+    { name: "webhook", send: () => sendWebhook(lead) },
+  ];
+
+  const outcome: NotifyOutcome = { attempted: [], delivered: [], failed: [] };
+
+  const results = await Promise.allSettled(destinations.map((d) => d.send()));
+
+  results.forEach((result, i) => {
+    const { name } = destinations[i];
+
+    if (result.status === "rejected") {
+      const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
+      outcome.attempted.push(name);
+      outcome.failed.push({ destination: name, reason });
+      console.error(`[leads] ${lead.id} ${name} notification failed:`, result.reason);
+      return;
     }
-  }
+
+    // `false` means the destination is not configured, so it was never tried.
+    if (result.value) {
+      outcome.attempted.push(name);
+      outcome.delivered.push(name);
+    }
+  });
+
+  return outcome;
 }
 
 /** Very small in-memory rate limiter — enough to blunt casual form spam. */

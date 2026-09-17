@@ -6,8 +6,10 @@ import {
   rateLimit,
   newLeadId,
   hasDurableDestination,
+  isFileStorageDurable,
   type StoredLead,
 } from "@/lib/leads";
+import { site } from "@/content/site";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -64,36 +66,40 @@ export async function POST(req: NextRequest) {
     status: "new",
   };
 
+  let persisted = true;
   try {
     await persistLead(lead);
   } catch (err) {
-    // If we cannot write to disk we can still try to notify — but the customer
-    // deserves to know if we cannot record their request at all.
-    console.error("[leads] persist failed:", err);
-    try {
-      await notifyNewLead(lead);
-      return NextResponse.json({ ok: true, reference: lead.id });
-    } catch {
-      return NextResponse.json(
-        {
-          ok: false,
-          error: "We could not save your request. Please call us so it doesn't get lost.",
-        },
-        { status: 500 },
-      );
-    }
+    persisted = false;
+    console.error(`[leads] ${lead.id} persist failed:`, err);
   }
 
-  await notifyNewLead(lead);
+  const notified = await notifyNewLead(lead);
 
-  // Loud warning for a deploy where nothing durable is configured. On a
-  // serverless host the file write above does not survive the deploy, so this
-  // lead exists nowhere the office will ever see it.
-  if (!hasDurableDestination()) {
+  // A lead survives this request only if it landed somewhere that outlives it:
+  // a durable file, or a notification destination that actually accepted it.
+  // On Vercel the file is /tmp, so a configured-but-failing Resend key leaves
+  // NOTHING behind — and telling the customer "received" in that state is how
+  // a real job gets lost. Say so instead, and point them at the phone.
+  const recoverable = (persisted && isFileStorageDurable()) || notified.delivered.length > 0;
+
+  if (!recoverable) {
     console.error(
-      `[leads] ${lead.id} was accepted but NO notification destination is ` +
-        `configured. Set RESEND_API_KEY + LEAD_NOTIFICATION_EMAIL + ` +
-        `LEAD_FROM_EMAIL, or LEAD_WEBHOOK_URL, or this lead is lost.`,
+      `[leads] ${lead.id} COULD NOT BE RECORDED ANYWHERE DURABLE. ` +
+        (hasDurableDestination()
+          ? `Destinations are configured but every one failed: ${notified.failed
+              .map((f) => `${f.destination} (${f.reason})`)
+              .join("; ")}`
+          : `No notification destination is configured. Set RESEND_API_KEY + ` +
+            `LEAD_NOTIFICATION_EMAIL + LEAD_FROM_EMAIL, or LEAD_WEBHOOK_URL.`),
+    );
+
+    return NextResponse.json(
+      {
+        ok: false,
+        error: `We could not record your request. Please call us at ${site.phone} so it doesn't get lost.`,
+      },
+      { status: 500 },
     );
   }
 
